@@ -1,0 +1,157 @@
+//@version=6
+strategy("MACD Strategy (Refactored)", overlay=true, slippage=2, initial_capital=10000000, default_qty_type=strategy.percent_of_equity, default_qty_value=50, use_bar_magnifier=true)
+
+//---------------------------------------------------------
+// 1. TRADING SESSION SETTINGS
+//---------------------------------------------------------
+groupSession = "Session Settings"
+tradingStartHour = input.int(9, "Trading Start Hour (24h)", minval=0, maxval=23, group=groupSession)
+tradingEndHour   = input.int(16, "Trading End Hour (24h)",   minval=0, maxval=23, group=groupSession)
+
+currentHour      = hour(time)
+inFullSession    = currentHour >= tradingStartHour and currentHour < tradingEndHour
+timeWindow       = currentHour >= tradingStartHour and currentHour < tradingEndHour - 2
+
+ticks_per_price  = 1.0 / syminfo.mintick
+
+//---------------------------------------------------------
+// 2. MACD SETTINGS
+//---------------------------------------------------------
+groupMACD      = "MACD Settings"
+fastLength     = input.int(12, minval=1, title="Fast Length", group=groupMACD)
+slowLength     = input.int(26, minval=1, title="Slow Length", group=groupMACD)
+signalSmoothing= input.int(9,  minval=1, title="Signal Smoothing", group=groupMACD)
+scaleFactor    = input.float(1.0, title="MACD Scale Factor", step=0.1, group=groupMACD)
+
+sessionClose   = inFullSession ? close : na
+[macdLine, signalLine, _] = ta.macd(sessionClose, fastLength, slowLength, signalSmoothing)
+
+macdOverlay    = close + macdLine * scaleFactor
+signalOverlay  = close + signalLine * scaleFactor
+
+//---------------------------------------------------------
+// 3. ATR / VOLATILITY / STOPS
+//---------------------------------------------------------
+groupATR              = "ATR / Stops & Targets"
+atrLength             = input.int(14, minval=1, title="ATR Length", group=groupATR)
+trailATRMult          = input.float(0.25, minval=0.1, step=0.1, title="ATR Multiplier Trail", group=groupATR)
+takeProfitATRMult     = input.float(3.0,  minval=0.1, step=0.1, title="ATR Multiplier TP", group=groupATR)
+stopLossATRMult       = input.float(0.7,  minval=0.1, step=0.1, title="ATR Multiplier SL", group=groupATR)
+trailActivationAtrMult= input.float(0.3,  minval=0.1, step=0.1, title="ATR Multiplier Trail Activation", group=groupATR)
+minATRpercent         = input.float(0.3,  minval=0.0, step=0.1, title="Minimal ATR (% of Price)", group=groupATR)
+
+inAtrSession  = currentHour >= tradingStartHour and currentHour <= tradingEndHour
+tr            = inAtrSession ? ta.tr(true) : na
+atrValue      = ta.rma(tr, atrLength)
+atrPercent    = atrValue / close * 100.0
+
+//---------------------------------------------------------
+// 4. TREND FILTER (D – VWMA)
+//---------------------------------------------------------
+groupTrend    = "Trend Filter (Daily VWMA)"
+maShortLenD   = input.int(9,  title="VWMA Short (D)", group=groupTrend)
+maLongLenD    = input.int(21, title="VWMA Long (D)",  group=groupTrend)
+
+maShortD      = request.security(syminfo.tickerid, "D", ta.vwma(close, maShortLenD))
+maLongD       = request.security(syminfo.tickerid, "D", ta.vwma(close, maLongLenD))
+
+trendUp       = maShortD > maLongD
+trendDown     = maShortD < maLongD
+
+//---------------------------------------------------------
+// 5. ENTRY OFFSET
+//---------------------------------------------------------
+groupEntry    = "Entry Settings"
+offsetPercent = input.float(0.05, title="Entry Offset (%)", step=0.01, group=groupEntry)
+
+longLimitPrice  = close * (1 - offsetPercent / 100)
+shortLimitPrice = close * (1 + offsetPercent / 100)
+
+//---------------------------------------------------------
+// 6. ENTRY CONDITIONS
+//---------------------------------------------------------
+macdBull       = ta.crossover(macdLine, signalLine)
+macdBear       = ta.crossunder(macdLine, signalLine)
+volatilityOK   = atrPercent >= minATRpercent
+
+longCondition  = macdBull and volatilityOK and trendUp and timeWindow
+shortCondition = macdBear and volatilityOK and trendDown and timeWindow
+
+//---------------------------------------------------------
+// 7. ORDERS
+//---------------------------------------------------------
+
+// LONG
+if longCondition
+    longTP = longLimitPrice + atrValue * takeProfitATRMult
+    longSL = longLimitPrice - atrValue * stopLossATRMult
+    longTrailActivation = longLimitPrice + atrValue * trailActivationAtrMult
+    longTrailOffset = atrValue * trailATRMult * ticks_per_price
+
+    longComment = "TP: " + str.tostring(longTP, format.mintick) + " SL: " + str.tostring(longSL, format.mintick)
+    strategy.entry("Long", strategy.long, limit=longLimitPrice, comment=longComment)
+    strategy.exit("Exit Long", "Long", stop=longSL, limit=longTP, trail_price=longTrailActivation, trail_offset=longTrailOffset)
+
+    alert(str.format("MACD Strategy NASDAQ: Long Entry @ {0}, TP: {1}, SL: {2}, Trail Offset: {3}", str.tostring(longLimitPrice, format.mintick), str.tostring(longTP, format.mintick), str.tostring(longSL, format.mintick), str.tostring(atrValue * trailATRMult, format.mintick)), alert.freq_once_per_bar_close)
+
+// SHORT
+if shortCondition
+    shortTP = shortLimitPrice - atrValue * takeProfitATRMult
+    shortSL = shortLimitPrice + atrValue * stopLossATRMult
+    shortTrailActivation = shortLimitPrice - atrValue * trailActivationAtrMult
+    shortTrailOffset = atrValue * trailATRMult * ticks_per_price
+
+    shortComment = "TP: " + str.tostring(shortTP, format.mintick) + " SL: " + str.tostring(shortSL, format.mintick)
+    strategy.entry("Short", strategy.short, limit=shortLimitPrice, comment=shortComment)
+    strategy.exit("Exit Short", "Short", stop=shortSL, limit=shortTP, trail_price=shortTrailActivation, trail_offset=shortTrailOffset)
+
+    alert(str.format("MACD Strategy NASDAQ: Short Entry @ {0}, TP: {1}, SL: {2}, Trail Offset: {3}", str.tostring(shortLimitPrice, format.mintick), str.tostring(shortTP, format.mintick), str.tostring(shortSL, format.mintick), str.tostring(atrValue * trailATRMult, format.mintick)), alert.freq_once_per_bar_close)
+
+//---------------------------------------------------------
+// 8. POSITION MANAGEMENT
+//---------------------------------------------------------
+if timeWindow
+    if macdBear
+        strategy.close("Long")
+    if macdBull
+        strategy.close("Short")
+
+if currentHour == tradingEndHour
+    strategy.close_all(comment="EOD Close")
+
+//---------------------------------------------------------
+// 9. PLOTS
+//---------------------------------------------------------
+plot(macdOverlay, color=color.blue, title="MACD Overlay")
+plot(signalOverlay, color=color.orange, title="Signal Overlay")
+plot(maShortD, color=color.green, title="VWMA Short D", display=display.none)
+plot(maLongD, color=color.red, title="VWMA Long D", display=display.none)
+
+//---------------------------------------------------------
+// 10. SIGNAL TABLE
+//---------------------------------------------------------
+var table signalTable = table.new(position.top_right, 9, 8, border_width=1, frame_color=color.gray, bgcolor=color.black)
+
+table.cell(signalTable, 0, 0, "Time", text_color=color.white, text_size=size.small)
+table.cell(signalTable, 0, 1, timeWindow ? "YES" : "NO", text_color=timeWindow?color.green:color.red, text_size=size.small)
+
+table.cell(signalTable, 1, 0, "Volatility", text_color=color.white, text_size=size.small)
+table.cell(signalTable, 1, 1, volatilityOK ? "OK" : "LOW", text_color=volatilityOK?color.green:color.red, text_size=size.small)
+
+table.cell(signalTable, 2, 0, "MACD Bull", text_color=color.white, text_size=size.small)
+table.cell(signalTable, 2, 1, macdBull ? "YES" : "NO", text_color=macdBull?color.green:color.red, text_size=size.small)
+
+table.cell(signalTable, 3, 0, "Trend Up", text_color=color.white, text_size=size.small)
+table.cell(signalTable, 3, 1, trendUp ? "YES" : "NO", text_color=trendUp?color.green:color.red, text_size=size.small)
+
+table.cell(signalTable, 4, 0, "Long", text_color=color.white, text_size=size.small)
+table.cell(signalTable, 4, 1, longCondition ? "YES" : "NO", bgcolor=longCondition?color.green:color.red, text_color=color.white, text_size=size.small)
+
+table.cell(signalTable, 5, 0, "MACD Bear", text_color=color.white, text_size=size.small)
+table.cell(signalTable, 5, 1, macdBear ? "YES" : "NO", text_color=macdBear?color.green:color.red, text_size=size.small)
+
+table.cell(signalTable, 6, 0, "Trend Down", text_color=color.white, text_size=size.small)
+table.cell(signalTable, 6, 1, trendDown ? "YES" : "NO", text_color=trendDown?color.green:color.red, text_size=size.small)
+
+table.cell(signalTable, 7, 0, "Short", text_color=color.white, text_size=size.small)
+table.cell(signalTable, 7, 1, shortCondition ? "YES" : "NO", bgcolor=shortCondition?color.green:color.red, text_color=color.white, text_size=size.small)

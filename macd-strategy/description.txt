@@ -1,0 +1,32 @@
+MACD Intraday Strategy (5–15 Minute Timeframes)
+
+This strategy is designed specifically for short-term intraday trading on 5-minute to 15-minute charts. It combines fast MACD momentum signals with an ATR-based volatility filter, daily VWMA trend confirmation, and adaptive risk management. The system is optimized for the noise structure typical of low intraday timeframes and aims to capture directional intraday moves while avoiding low-volatility and countertrend environments.
+
+Core Components:
+
+Timeframe Focus (5m–15m)
+The strategy is intended for short intraday intervals. MACD provides responsive momentum signals suitable for 5–15 minute bars, while higher-timeframe VWMA trend direction helps remove market noise and false breakouts.
+
+MACD Momentum Entries
+Long trades are opened when the MACD line crosses above the signal line, and short trades when it crosses below. MACD is calculated on session-only prices and visually aligned with price movements. Signals are used only within predefined intraday trading hours.
+
+ATR Volatility Filter
+ATR is used to block trades when volatility is too low. This is essential for 5–15 minute charts, where quiet market periods often produce false MACD signals. The filter ensures trades occur only during sufficiently active market conditions.
+
+Daily VWMA Trend Filter
+Daily VWMA averages act as a higher-timeframe trend guide. Long trades require VWMA(D short) > VWMA(D long), and short trades require the opposite. This prevents the strategy from trading against the macro trend, which is especially important on low-timeframe charts.
+
+ATR-based Risk Management
+Stop Loss, Take Profit, and Trailing Stop levels are dynamically calculated as multiples of ATR. This allows the strategy to adapt risk to current market volatility. Trailing stops activate only after a favorable price move. All entries are executed using limit orders with a configurable price offset.
+
+Intraday Session Control
+The system trades only within a specific time window, typically aligned with active market hours. Positions can also be closed on opposite MACD signals. All positions are automatically closed at the end of the trading day.
+
+Visual Diagnostic Panel
+A live on-chart panel displays the status of all key conditions: volatility, trend direction, MACD signals, and readiness for long or short trades. This helps understand why the strategy is—or is not—entering positions.
+
+Optimized For:
+• Intraday trading on 5–15 minute timeframes
+• Momentum and trend-following setups
+• ATR-normalized position and risk management
+• Systematic, rule-based trading frameworks
