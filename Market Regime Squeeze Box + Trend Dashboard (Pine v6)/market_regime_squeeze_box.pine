@@ -1,0 +1,228 @@
+//@version=6
+indicator("Market Regime: Squeeze Box + Trend Dashboard", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Inputs
+// ─────────────────────────────────────────────────────────────────────────────
+grpRegime = "Regime"
+fastEmaLen = input.int(21, "Fast EMA", minval=1, group=grpRegime)
+slowEmaLen = input.int(55, "Slow EMA", minval=1, group=grpRegime)
+adxLen = input.int(14, "DMI/ADX Length", minval=1, group=grpRegime)
+adxSmooth = input.int(14, "ADX Smoothing", minval=1, group=grpRegime)
+adxTrendTh = input.float(20.0, "ADX Trend Threshold", minval=1.0, step=0.5, group=grpRegime)
+adxRangeTh = input.float(15.0, "ADX Range Threshold", minval=1.0, step=0.5, group=grpRegime)
+confirmBars = input.int(3, "Trend/Range confirmation bars", minval=1, maxval=20, group=grpRegime)
+
+grpSqueeze = "Squeeze (BB vs KC)"
+bbLen = input.int(20, "BB Length", minval=1, group=grpSqueeze)
+bbMult = input.float(2.0, "BB Mult", minval=0.1, step=0.1, group=grpSqueeze)
+kcLen = input.int(20, "KC Length", minval=1, group=grpSqueeze)
+kcMult = input.float(1.5, "KC Mult (ATR)", minval=0.1, step=0.1, group=grpSqueeze)
+
+grpVol = "Volume Heatmap"
+volLen = input.int(20, "Volume SMA Length", minval=1, group=grpVol)
+rvHi = input.float(1.5, "RelVol High", minval=0.1, step=0.1, group=grpVol)
+rvVHi = input.float(2.5, "RelVol Very High", minval=0.1, step=0.1, group=grpVol)
+
+grpViz = "Visuals"
+showCandleColors = input.bool(true, "Color candles (regime + volume tier)", group=grpViz)
+backgroundMode = input.string("Squeeze only", "Background mode", options=["Off","Squeeze only","All regimes"], group=grpViz)
+showEMAs = input.bool(true, "Show EMA ribbon", group=grpViz)
+showBands = input.bool(false, "Show BB & KC bands", group=grpViz)
+showSqueezeMarks = input.bool(true, "Show squeeze event markers", group=grpViz)
+showSqueezeBox = input.bool(true, "Show Squeeze Box (premium)", group=grpViz)
+showDashboard = input.bool(true, "Show dashboard", group=grpViz)
+dashPos = input.string("Top Right", "Dashboard position", options=["Top Right","Top Left","Bottom Right","Bottom Left"], group=grpViz)
+
+grpHist = "History (Premium)"
+keepSqueezeHistory = input.bool(true, "Keep squeeze boxes history", group=grpHist)
+maxSqueezeBoxes = input.int(25, "Max squeeze boxes", minval=1, maxval=200, group=grpHist)
+keepRegimeLabelHistory = input.bool(false, "Keep regime labels history", group=grpHist)
+maxRegimeLabels = input.int(25, "Max regime labels", minval=1, maxval=200, group=grpHist)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+f_clamp(x, lo, hi) => math.max(lo, math.min(x, hi))
+f_pos(p) => p == "Top Right" ? position.top_right : p == "Top Left" ? position.top_left : p == "Bottom Right" ? position.bottom_right : position.bottom_left
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Core calculations
+// ─────────────────────────────────────────────────────────────────────────────
+emaFast = ta.ema(close, fastEmaLen)
+emaSlow = ta.ema(close, slowEmaLen)
+
+[diPlus, diMinus, adx] = ta.dmi(adxLen, adxSmooth)
+dirUp = diPlus > diMinus
+dirDn = diMinus > diPlus
+
+isTrend = adx >= adxTrendTh
+isRange = adx <= adxRangeTh
+
+bbBasis = ta.sma(close, bbLen)
+bbDev = bbMult * ta.stdev(close, bbLen)
+bbUpper = bbBasis + bbDev
+bbLower = bbBasis - bbDev
+
+tp = (high + low + close) / 3.0
+kcBasis = ta.ema(tp, kcLen)
+kcRange = ta.atr(kcLen) * kcMult
+kcUpper = kcBasis + kcRange
+kcLower = kcBasis - kcRange
+
+squeezeOn = (bbUpper < kcUpper) and (bbLower > kcLower)
+squeezeStart = squeezeOn and not squeezeOn[1]
+squeezeRelease = (not squeezeOn) and squeezeOn[1]  // technicznie poprawnie: pierwszy bar PO squeeze
+
+var int trendCnt = 0
+var int rangeCnt = 0
+trendCnt := isTrend ? math.min(nz(trendCnt[1]) + 1, confirmBars) : 0
+rangeCnt := isRange ? math.min(nz(rangeCnt[1]) + 1, confirmBars) : 0
+trendOk = trendCnt >= confirmBars
+rangeOk = rangeCnt >= confirmBars
+
+volSma = ta.sma(volume, volLen)
+relVol = volSma > 0 ? (volume / volSma) : na
+
+atr14 = ta.atr(14)
+atrPct = close != 0 ? (100.0 * atr14 / close) : na
+gapPct = close[1] != 0 ? (100.0 * (open - close[1]) / close[1]) : na
+
+regime = squeezeOn ? "SQUEEZE" : trendOk ? "TREND" : rangeOk ? "RANGE" : "NEUTRAL"
+trendDir = dirUp ? "UP" : dirDn ? "DOWN" : "MIXED"
+
+adxNorm = f_clamp((adx - adxRangeTh) / math.max(adxTrendTh - adxRangeTh, 0.0001), 0.0, 1.0)
+emaSlopePct = close != 0 ? (100.0 * (emaSlow - emaSlow[1]) / close) : na
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Colors
+// ─────────────────────────────────────────────────────────────────────────────
+baseCol = regime == "SQUEEZE" ? color.fuchsia : regime == "TREND" ? (dirUp ? color.lime : color.red) : regime == "RANGE" ? color.silver : color.aqua
+rvTier = na(relVol) ? 0 : relVol >= rvVHi ? 2 : relVol >= rvHi ? 1 : 0
+alphaCand = rvTier == 2 ? 5 : rvTier == 1 ? 30 : 65
+candCol = color.new(baseCol, alphaCand)
+
+alphaBgAll = regime == "SQUEEZE" ? 90 : regime == "TREND" ? 93 : regime == "RANGE" ? 96 : 97
+bgColAll = color.new(baseCol, alphaBgAll)
+bgColSqz = color.new(color.fuchsia, 90)
+
+rvTag = na(relVol) ? "n/a" : (relVol >= rvVHi ? "VERY HIGH" : relVol >= rvHi ? "HIGH" : "NORMAL")
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Background + Candle coloring
+// ─────────────────────────────────────────────────────────────────────────────
+barcolor(showCandleColors ? candCol : na)
+bgcolor(backgroundMode == "All regimes" ? bgColAll : backgroundMode == "Squeeze only" ? (squeezeOn ? bgColSqz : na) : na)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EMA Ribbon (opacity reacts to ADX strength)
+// ─────────────────────────────────────────────────────────────────────────────
+pFast = plot(showEMAs ? emaFast : na, "EMA Fast", color=color.new(color.teal, 0), linewidth=2)
+pSlow = plot(showEMAs ? emaSlow : na, "EMA Slow", color=color.new(color.orange, 0), linewidth=2)
+ribAlpha = int(f_clamp(92.0 - (adxNorm * 45.0), 40.0, 92.0))
+fill(pFast, pSlow, color=showEMAs ? color.new(baseCol, ribAlpha) : na, title="EMA Ribbon Fill")
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Bands (optional)
+// ─────────────────────────────────────────────────────────────────────────────
+plot(showBands ? bbUpper : na, "BB Upper", color=color.new(color.blue, 0), linewidth=1)
+plot(showBands ? bbBasis : na, "BB Basis", color=color.new(color.blue, 50), linewidth=1)
+plot(showBands ? bbLower : na, "BB Lower", color=color.new(color.blue, 0), linewidth=1)
+plot(showBands ? kcUpper : na, "KC Upper", color=color.new(color.purple, 0), linewidth=1)
+plot(showBands ? kcBasis : na, "KC Basis", color=color.new(color.purple, 50), linewidth=1)
+plot(showBands ? kcLower : na, "KC Lower", color=color.new(color.purple, 0), linewidth=1)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Premium: Squeeze Box + History (multiple boxes with limit)
+// ─────────────────────────────────────────────────────────────────────────────
+var box sqBox = na
+var float sqTop = na
+var float sqBot = na
+var array<box> sqBoxes = array.new_box()
+
+if showSqueezeBox and squeezeStart
+    sqTop := high
+    sqBot := low
+    if not keepSqueezeHistory and not na(sqBox)
+        box.delete(sqBox)
+    sqBox := box.new(bar_index, sqTop, bar_index, sqBot, bgcolor=color.new(color.fuchsia, 92), border_color=color.new(color.fuchsia, 55), border_width=1)
+    if keepSqueezeHistory
+        array.push(sqBoxes, sqBox)
+        if array.size(sqBoxes) > maxSqueezeBoxes
+            box oldB = array.shift(sqBoxes)
+            if not na(oldB)
+                box.delete(oldB)
+
+if showSqueezeBox and squeezeOn and not na(sqBox)
+    sqTop := math.max(nz(sqTop), high)
+    sqBot := math.min(nz(sqBot), low)
+    box.set_right(sqBox, bar_index)
+    box.set_top(sqBox, sqTop)
+    box.set_bottom(sqBox, sqBot)
+
+if showSqueezeBox and squeezeRelease and not na(sqBox)
+    box.set_right(sqBox, bar_index)
+    box.set_border_color(sqBox, color.new(color.lime, 40))
+    box.set_bgcolor(sqBox, color.new(color.fuchsia, 94))
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Squeeze markers (events only; REL is technically correct bar)
+// ─────────────────────────────────────────────────────────────────────────────
+plotshape(showSqueezeMarks and squeezeStart, title="Squeeze Start", style=shape.circle, location=location.belowbar, size=size.tiny, color=color.new(color.fuchsia, 0), text="SQZ")
+plotshape(showSqueezeMarks and squeezeRelease, title="Squeeze Release", style=shape.triangleup, location=location.belowbar, size=size.tiny, color=color.new(color.lime, 0), text="REL")
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Dashboard (table)
+// ─────────────────────────────────────────────────────────────────────────────
+var table dash = na
+if barstate.isfirst and showDashboard
+    dash := table.new(f_pos(dashPos), 2, 8, border_width=1)
+
+if barstate.islast and showDashboard and not na(dash)
+    headBg = color.new(color.black, 0)
+    cellBg = color.new(color.black, 75)
+    valBg = color.new(baseCol, 82)
+    txt = color.new(color.white, 0)
+    table.cell(dash, 0, 0, "REGIME", text_color=txt, bgcolor=headBg, text_size=size.small)
+    table.cell(dash, 1, 0, regime, text_color=txt, bgcolor=valBg, text_size=size.small)
+    table.cell(dash, 0, 1, "DIR", text_color=txt, bgcolor=cellBg, text_size=size.small)
+    table.cell(dash, 1, 1, trendDir, text_color=txt, bgcolor=cellBg, text_size=size.small)
+    table.cell(dash, 0, 2, "ADX", text_color=txt, bgcolor=cellBg, text_size=size.small)
+    table.cell(dash, 1, 2, str.tostring(adx, "#.0") + " (" + str.tostring(adxNorm * 100.0, "#") + "%)", text_color=txt, bgcolor=cellBg, text_size=size.small)
+    table.cell(dash, 0, 3, "SQUEEZE", text_color=txt, bgcolor=cellBg, text_size=size.small)
+    table.cell(dash, 1, 3, squeezeOn ? "ON" : "OFF", text_color=txt, bgcolor=squeezeOn ? color.new(color.fuchsia, 82) : cellBg, text_size=size.small)
+    table.cell(dash, 0, 4, "REL VOL", text_color=txt, bgcolor=cellBg, text_size=size.small)
+    table.cell(dash, 1, 4, na(relVol) ? "n/a" : (str.tostring(relVol, "#.00") + " (" + rvTag + ")"), text_color=txt, bgcolor=cellBg, text_size=size.small)
+    table.cell(dash, 0, 5, "ATR% (14)", text_color=txt, bgcolor=cellBg, text_size=size.small)
+    table.cell(dash, 1, 5, na(atrPct) ? "n/a" : (str.tostring(atrPct, "#.00") + "%"), text_color=txt, bgcolor=cellBg, text_size=size.small)
+    table.cell(dash, 0, 6, "EMA SLOPE%", text_color=txt, bgcolor=cellBg, text_size=size.small)
+    table.cell(dash, 1, 6, na(emaSlopePct) ? "n/a" : (str.tostring(emaSlopePct, "#.000") + "%"), text_color=txt, bgcolor=cellBg, text_size=size.small)
+    table.cell(dash, 0, 7, "GAP% (O vs prev C)", text_color=txt, bgcolor=cellBg, text_size=size.small)
+    table.cell(dash, 1, 7, na(gapPct) ? "n/a" : (str.tostring(gapPct, "#.00") + "%"), text_color=txt, bgcolor=cellBg, text_size=size.small)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Regime change labels + History (multiple labels with limit)
+// ─────────────────────────────────────────────────────────────────────────────
+var label lastLbl = na
+var array<label> regimeLabels = array.new_label()
+regimeChange = barstate.isconfirmed and (regime != regime[1])
+
+if regimeChange
+    if not keepRegimeLabelHistory and not na(lastLbl)
+        label.delete(lastLbl)
+    lastLbl := label.new(bar_index, low, "Regime: " + regime, style=label.style_label_up, textcolor=color.new(color.white, 0), color=color.new(baseCol, 0), size=size.small)
+    if keepRegimeLabelHistory
+        array.push(regimeLabels, lastLbl)
+        if array.size(regimeLabels) > maxRegimeLabels
+            label oldL = array.shift(regimeLabels)
+            if not na(oldL)
+                label.delete(oldL)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Alerts (const messages only)
+// ─────────────────────────────────────────────────────────────────────────────
+alertcondition(squeezeStart, "Squeeze Start", "Squeeze started (BB inside KC).")
+alertcondition(squeezeRelease, "Squeeze Release", "Squeeze released (BB exited KC).")
+alertcondition(regime != regime[1], "Regime Change", "Market regime changed.")
+alertcondition(trendOk and dirUp and not (trendOk[1] and dirUp[1]), "Trend Up Start", "Trend UP detected (confirmed).")
+alertcondition(trendOk and dirDn and not (trendOk[1] and dirDn[1]), "Trend Down Start", "Trend DOWN detected (confirmed).")
