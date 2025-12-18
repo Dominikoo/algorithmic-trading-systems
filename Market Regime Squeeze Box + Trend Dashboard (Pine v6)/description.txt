@@ -1,0 +1,104 @@
+Overview
+This indicator is a TradingView overlay designed for stock charts. It combines
+(1) market regime detection (TREND / RANGE / NEUTRAL), (2) volatility squeeze detection
+(Bollinger Bands inside Keltner Channels), and (3) clean, customizable visualization:
+
+- EMA Ribbon: fast/slow EMA with adaptive fill opacity based on ADX strength.
+- Squeeze Background: optional background shading for squeeze periods or all regimes.
+- Squeeze Box (Premium): optional box that spans from squeeze start to release, tracking
+  the highest high and lowest low during the squeeze (breakout context).
+- Event Markers: SQZ at squeeze start, REL at squeeze release (technically correct).
+- Dashboard: compact table with regime, direction, ADX strength, rel volume, ATR%, EMA slope%, gap%.
+- History Controls: keep multiple boxes/labels with limits to avoid clutter/performance issues.
+
+No Look-Ahead / Repainting Notes
+- The script does NOT use request.security() with lookahead_on, and never references future bars.
+- Calculations use current and past bars only (e.g., squeezeRelease uses squeezeOn[1]).
+- On an unconfirmed realtime bar, values can change intrabar (normal behavior). Signals stabilize
+  on bar close; label creation uses barstate.isconfirmed for regime change labels.
+
+1) Market Regime Logic (Trend / Range / Neutral)
+- DMI/ADX is computed via ta.dmi(adxLen, adxSmooth), producing DI+ (diPlus), DI- (diMinus), and ADX (adx).
+- Trend direction:
+    UP   when DI+ > DI-
+    DOWN when DI- > DI+
+    MIXED otherwise
+- Thresholds:
+    isTrend = adx >= adxTrendTh
+    isRange = adx <= adxRangeTh
+- Confirmation (anti-flicker):
+    trendCnt counts consecutive bars where isTrend is true (capped at confirmBars).
+    rangeCnt counts consecutive bars where isRange is true (capped at confirmBars).
+    trendOk = trendCnt >= confirmBars
+    rangeOk = rangeCnt >= confirmBars
+- Regime priority:
+    SQUEEZE overrides everything (regime = "SQUEEZE" whenever squeezeOn is true).
+    Otherwise:
+      TREND if trendOk
+      RANGE if rangeOk
+      NEUTRAL otherwise
+
+2) Squeeze Logic (BB inside KC)
+- Bollinger Bands:
+    bbBasis = SMA(close, bbLen)
+    bbUpper/bbLower = bbBasis ± (stdev(close, bbLen) * bbMult)
+- Keltner Channel (EMA of typical price ± ATR range):
+    tp = (high + low + close) / 3
+    kcBasis = EMA(tp, kcLen)
+    kcUpper/kcLower = kcBasis ± (ATR(kcLen) * kcMult)
+- Squeeze condition:
+    squeezeOn = (bbUpper < kcUpper) AND (bbLower > kcLower)
+- Events:
+    squeezeStart   = squeezeOn AND NOT squeezeOn[1]            (first bar of squeeze)
+    squeezeRelease = (NOT squeezeOn) AND squeezeOn[1]           (first bar AFTER squeeze; technically correct)
+
+3) Visualization Layer
+- Candle coloring (optional):
+    Candles are colored by regime base color with transparency adjusted by RelVol tier.
+- Background modes:
+    Off            -> no background
+    Squeeze only   -> background shaded only while squeezeOn is true
+    All regimes    -> background shaded by current regime
+- EMA Ribbon (optional):
+    Plots fast/slow EMA lines and fills between them.
+    Fill opacity responds to ADX strength (adxNorm) to visually emphasize stronger trends.
+- BB/KC bands (optional):
+    Plots BB and KC envelopes for debugging/visual confirmation.
+- Squeeze Box (premium, optional):
+    On squeezeStart: creates a new box spanning current bar with top=high and bottom=low.
+    During squeezeOn: updates right edge to current bar, updates top/bottom with running high/low.
+    On squeezeRelease: finalizes the box at release bar and changes styling (border highlight).
+    History behavior:
+      If keepSqueezeHistory = false: previous box is deleted when a new squeeze starts.
+      If keepSqueezeHistory = true: boxes are kept in an array and the oldest is deleted when limit exceeded.
+- Markers (optional):
+    SQZ marker at squeezeStart (circle)
+    REL marker at squeezeRelease (triangle)
+- Dashboard (optional):
+    Shows: REGIME, DIR, ADX (+ normalized %), SQUEEZE ON/OFF, REL VOL (+ tier), ATR% (14),
+           EMA SLOPE% (slow EMA), GAP% (open vs previous close).
+
+4) Metrics Definitions (Dashboard)
+- ADX normalization (0..1 between range and trend thresholds):
+    adxNorm = clamp((adx - adxRangeTh) / max(adxTrendTh - adxRangeTh, eps), 0, 1)
+- Relative Volume:
+    relVol = volume / SMA(volume, volLen) (if SMA>0)
+    rvTag: NORMAL / HIGH / VERY HIGH based on rvHi and rvVHi
+- ATR% (14):
+    atrPct = 100 * ATR(14) / close
+- EMA Slope%:
+    emaSlopePct = 100 * (emaSlow - emaSlow[1]) / close
+- Gap%:
+    gapPct = 100 * (open - close[1]) / close[1]
+
+5) Alerts
+- Alerts are provided for squeeze start/release, regime change, and confirmed trend direction starts.
+- alertcondition messages are constant strings (TradingView requirement).
+
+Recommended Portfolio Preset (clean look)
+- Background mode: Squeeze only
+- Show EMA ribbon: ON
+- Show Squeeze Box: ON
+- Show squeeze markers: ON
+- Color candles: optional (often OFF for clean screenshots)
+- Keep squeeze history: ON with a modest max (10–25)
